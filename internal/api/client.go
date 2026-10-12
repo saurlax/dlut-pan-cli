@@ -20,6 +20,16 @@ type Client struct {
 	Timeout                 time.Duration
 }
 
+// HTTPError exposes a status without retaining request URLs or response bodies.
+type HTTPError struct {
+	StatusCode int
+	Hint       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("API returned HTTP %d: %s", e.StatusCode, e.Hint)
+}
+
 func ValidateURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -91,7 +101,7 @@ func (c *Client) send(ctx context.Context, method, endpoint string, body io.Read
 		case 429:
 			hint = "rate limited; retry later"
 		}
-		return nil, fmt.Errorf("API returned HTTP %d: %s", resp.StatusCode, hint)
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Hint: hint}
 	}
 	return resp, nil
 }

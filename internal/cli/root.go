@@ -24,14 +24,19 @@ type usageError struct{ error }
 func invalid(message string) error { return usageError{errors.New(message)} }
 
 type options struct {
-	baseURL, authURL, rootID, token, username, device string
-	tokenStdin, passwordStdin, json, dryRun           bool
-	timeout                                           time.Duration
+	baseURL, authURL, rootID, username, device string
+	tokenStdin, passwordStdin, json, dryRun    bool
+	timeout                                    time.Duration
+	store                                      config.SessionStore
 }
 
 // Execute returns 0 for success, 2 for usage errors, and 1 for runtime errors.
 func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer, version string) int {
-	root := New(version)
+	return execute(ctx, args, in, out, errOut, version, config.SystemStore{})
+}
+
+func execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer, version string, store config.SessionStore) int {
+	root := newRoot(version, store)
 	root.SetArgs(args)
 	root.SetIn(in)
 	root.SetOut(out)
@@ -71,26 +76,22 @@ func group(use, short, long string) *cobra.Command {
 }
 
 func New(version string) *cobra.Command {
-	o := &options{}
-	root := group("dlut-pan", "Operate DLUT Pan from your terminal.", "Unofficial CLI for Dalian University of Technology's cloud drive.\nList folders, search files or groups, join groups and download individual files.\nCredentials stay in memory. Use DLUT_PAN_TOKEN or --username with a password prompt.\nThe default root is NAOSI; use --root-id for your personal or another group space.\nRun any command group without a subcommand to see its help.")
+	return newRoot(version, config.SystemStore{})
+}
+
+func newRoot(version string, store config.SessionStore) *cobra.Command {
+	o := &options{store: store}
+	root := group("dlut-pan", "Operate DLUT Pan from your terminal.", "Unofficial CLI for Dalian University of Technology's cloud drive.\nRun 'dlut-pan auth login' once to save your session in the system credential store.\nFile, search and group commands reuse the saved session without asking for credentials.\nThe default root is NAOSI; use --root-id for your personal or another group space.\nRun any command group without a subcommand to see its help.")
 	root.Version = version
 	root.SilenceErrors = true
 	root.SilenceUsage = true
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
 	f := root.PersistentFlags()
 	f.StringVar(&o.baseURL, "base-url", "", "API base URL (DLUT_PAN_BASE_URL or "+config.BaseURL+")")
-	f.StringVar(&o.authURL, "auth-url", "", "Login endpoint (DLUT_PAN_AUTH_URL or "+config.AuthURL+")")
 	f.StringVar(&o.rootID, "root-id", "", "Space root ID (DLUT_PAN_ROOT_ID or NAOSI "+config.NAOSIRoot+")")
-	f.StringVar(&o.token, "token", "", "Access token; prefer DLUT_PAN_TOKEN or --token-stdin to avoid shell history")
-	f.BoolVar(&o.tokenStdin, "token-stdin", false, "Read a token from stdin instead of the flag or environment")
-	f.StringVar(&o.username, "username", "", "Student/staff account (DLUT_PAN_USERNAME); authenticate for this command")
-	f.BoolVar(&o.passwordStdin, "password-stdin", false, "Read the login password from stdin instead of environment or terminal prompt")
-	f.StringVar(&o.device, "device", "dlut-pan-cli", "Login device, link name and LDAP identifier")
 	f.DurationVar(&o.timeout, "timeout", 30*time.Second, "HTTP request timeout, including download body (e.g. 30s or 10m)")
 	f.BoolVar(&o.json, "json", false, "Print API JSON with secret fields redacted")
 	f.BoolVar(&o.dryRun, "dry-run", false, "Preview method, URL and body without credentials or network access")
-	root.MarkFlagsMutuallyExclusive("token", "token-stdin")
-	root.MarkFlagsMutuallyExclusive("token-stdin", "password-stdin")
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if err := cmd.ValidateRequiredFlags(); err != nil {
 			return usageError{err}
@@ -109,19 +110,61 @@ func New(version string) *cobra.Command {
 		return nil
 	}
 
-	auth := group("auth", "Check authentication without saving credentials.", "Use an existing browser token for data commands, or authenticate with your account per invocation.\nNo passwords or tokens are written to disk or printed. See docs/authentication.md for CAS token input.")
-	login := &cobra.Command{Use: "login", Short: "Verify account credentials using the sign-in API.", Long: "Authenticate with --username or DLUT_PAN_USERNAME. The password is read from a hidden terminal prompt,\nDLUT_PAN_PASSWORD, or --password-stdin. The returned token is discarded when this process exits.\nUse the same account options on a data command to authenticate and perform the operation in one process.", Example: "  dlut-pan auth login --username 2026000000\n  dlut-pan file list / --username 2026000000", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
+	auth := group("auth", "Log in, inspect the saved session or log out.", "Log in once before using remote commands. Sessions are saved in the system credential store.\nPasswords are never saved. Use status to inspect local session presence and logout to remove it.")
+	login := &cobra.Command{Use: "login", Short: "Log in and save the session for subsequent commands.", Long: "Enter your account and password at terminal prompts, or supply --username and --password-stdin.\nThe returned token and API endpoint are saved in the system credential store; passwords are discarded.\nFor a browser CAS session, --token-stdin imports its token without remote validation.\nA successful login replaces the previous saved session. Later commands require no credential input.", Example: "  dlut-pan auth login\n  dlut-pan auth login --username YOUR_ACCOUNT\n  dlut-pan file list /", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
 		if o.dryRun {
+			if o.tokenStdin {
+				return writeJSON(cmd.OutOrStdout(), map[string]any{"action": "save_browser_session", "base_url": o.base(), "dry_run": true})
+			}
 			return o.preview(cmd, "POST", o.auth(), url.Values{"username": {"[REDACTED]"}, "password": {"[REDACTED]"}, "link_device": {o.device}, "link_name": {o.device}, "ldap_name": {o.device}}, nil)
 		}
 		client := o.client()
-		result, err := o.login(cmd, client)
+		if o.tokenStdin {
+			token, err := stdinSecret(cmd)
+			if err != nil {
+				return err
+			}
+			client.Token = strings.TrimSpace(token)
+			if client.Token == "" {
+				return invalid("stdin token must not be empty")
+			}
+		} else {
+			if _, err := o.login(cmd, client); err != nil {
+				return err
+			}
+		}
+		if err := o.store.Save(config.Session{Token: client.Token, BaseURL: o.base()}); err != nil {
+			return err
+		}
+		return o.render(cmd, map[string]any{"logged_in": true, "session_saved": true, "base_url": o.base()})
+	}}
+	login.Flags().StringVar(&o.authURL, "auth-url", "", "Login endpoint (DLUT_PAN_AUTH_URL or "+config.AuthURL+")")
+	login.Flags().StringVar(&o.username, "username", "", "Student/staff account (DLUT_PAN_USERNAME or terminal prompt)")
+	login.Flags().BoolVar(&o.passwordStdin, "password-stdin", false, "Read login password from stdin instead of environment or terminal prompt")
+	login.Flags().BoolVar(&o.tokenStdin, "token-stdin", false, "Import a browser session token from stdin and save it (not remotely validated)")
+	login.Flags().StringVar(&o.device, "device", "dlut-pan-cli", "Login device, link name and LDAP identifier")
+	login.MarkFlagsMutuallyExclusive("token-stdin", "password-stdin")
+	login.MarkFlagsMutuallyExclusive("token-stdin", "username")
+	status := &cobra.Command{Use: "status", Short: "Show whether a local login session is saved.", Long: "Inspect the system credential store without network requests or displaying the token.\nSession presence does not prove the server still accepts it; expired sessions require auth login again.", Example: "  dlut-pan auth status", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
+		session, err := o.store.Load()
+		if errors.Is(err, config.ErrNoSession) {
+			return o.render(cmd, map[string]any{"logged_in": false, "session_saved": false})
+		}
 		if err != nil {
 			return err
 		}
-		return o.render(cmd, result)
+		return o.render(cmd, map[string]any{"logged_in": true, "session_saved": true, "base_url": session.BaseURL})
 	}}
-	auth.AddCommand(login)
+	logout := &cobra.Command{Use: "logout", Short: "Remove the saved local login session.", Long: "Delete the session from the system credential store. Later remote commands require auth login again.\nThis is a local logout; no documented endpoint is available to revoke the server token.", Example: "  dlut-pan auth logout", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
+		if o.dryRun {
+			return writeJSON(cmd.OutOrStdout(), map[string]any{"action": "remove_saved_session", "dry_run": true})
+		}
+		if err := o.store.Clear(); err != nil {
+			return err
+		}
+		return o.render(cmd, map[string]any{"logged_in": false, "session_saved": false})
+	}}
+	auth.AddCommand(login, status, logout)
 
 	file := group("file", "List directories and download files.", "Paths are remote absolute paths, such as / or /courses. IDs come from list or search results.\nThe default root is NAOSI; permission errors require membership or an explicit --root-id.\nDownloads save one specified file; there is no recursive harvesting.")
 	list := &cobra.Command{Use: "list [PATH]", Aliases: []string{"ls"}, Short: "List a directory (defaults to /).", Long: "List a single directory using POST /fileops/list_folder with an empty body.\nUse --json to inspect all returned metadata and find file IDs for downloading.", Example: "  dlut-pan file list /\n  dlut-pan file list /courses --root-id YOUR_ROOT --json", Args: func(cmd *cobra.Command, values []string) error {
@@ -163,7 +206,7 @@ func New(version string) *cobra.Command {
 		}
 		n, err := client.Download(cmd.Context(), o.space(), values[0], output, overwrite)
 		if err != nil {
-			return err
+			return sessionError(err)
 		}
 		return o.render(cmd, map[string]any{"output": output, "bytes": n})
 	}}
@@ -274,7 +317,14 @@ func stdinSecret(cmd *cobra.Command) (string, error) {
 func (o *options) login(cmd *cobra.Command, client *api.Client) (any, error) {
 	username := config.Value(o.username, "DLUT_PAN_USERNAME", "")
 	if strings.TrimSpace(username) == "" {
-		return nil, invalid("provide --username or DLUT_PAN_USERNAME for account authentication")
+		f, ok := cmd.InOrStdin().(*os.File)
+		if !ok || !term.IsTerminal(int(f.Fd())) || o.passwordStdin {
+			return nil, invalid("provide --username or DLUT_PAN_USERNAME when no account prompt is available")
+		}
+		fmt.Fprint(cmd.ErrOrStderr(), "Account: ")
+		if _, err := fmt.Fscanln(cmd.InOrStdin(), &username); err != nil || strings.TrimSpace(username) == "" {
+			return nil, invalid("account must not be empty")
+		}
 	}
 	password := os.Getenv("DLUT_PAN_PASSWORD")
 	if o.passwordStdin {
@@ -306,32 +356,31 @@ func (o *options) login(cmd *cobra.Command, client *api.Client) (any, error) {
 }
 
 func (o *options) authenticated(cmd *cobra.Command) (*api.Client, error) {
+	session, err := o.store.Load()
+	if errors.Is(err, config.ErrNoSession) {
+		return nil, errors.New("not logged in; run 'dlut-pan auth login' first")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(session.Token) == "" || api.ValidateURL(session.BaseURL) != nil {
+		return nil, errors.New("saved session is invalid; run 'dlut-pan auth login' again")
+	}
+	if (o.baseURL != "" || os.Getenv("DLUT_PAN_BASE_URL") != "") && strings.TrimRight(session.BaseURL, "/") != o.base() {
+		return nil, errors.New("saved session belongs to another API endpoint; run 'dlut-pan auth login' for the selected --base-url")
+	}
 	c := o.client()
-	// Explicit account input selects fresh sign-in even if an old token is in the environment.
-	if o.username != "" || o.passwordStdin {
-		if o.token != "" || o.tokenStdin {
-			return nil, invalid("choose token authentication or username/password authentication")
-		}
-		_, err := o.login(cmd, c)
-		return c, err
+	c.BaseURL = strings.TrimRight(session.BaseURL, "/")
+	c.Token = session.Token
+	return c, nil
+}
+
+func sessionError(err error) error {
+	var status *api.HTTPError
+	if errors.As(err, &status) && status.StatusCode == 401 {
+		return fmt.Errorf("login session expired or rejected; run 'dlut-pan auth login' again: %w", err)
 	}
-	token := config.Value(o.token, "DLUT_PAN_TOKEN", "")
-	if o.tokenStdin {
-		var err error
-		token, err = stdinSecret(cmd)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if token = strings.TrimSpace(token); token != "" {
-		c.Token = token
-		return c, nil
-	}
-	if o.tokenStdin {
-		return nil, invalid("stdin token must not be empty")
-	}
-	_, err := o.login(cmd, c)
-	return c, err
+	return err
 }
 
 func (o *options) preview(cmd *cobra.Command, method, endpoint string, q url.Values, body any) error {
@@ -362,7 +411,7 @@ func (o *options) request(cmd *cobra.Command, method, path string, q url.Values,
 	}
 	value, err := c.Call(cmd.Context(), method, path, q, reader)
 	if err != nil {
-		return err
+		return sessionError(err)
 	}
 	return o.render(cmd, value)
 }

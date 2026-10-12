@@ -4,9 +4,11 @@ Use Go 1.26+. The project keeps mutable command state inside a newly constructed
 root, making repeated invocations and tests independent.
 
 `cmd/dlut-pan` owns process exit and interrupt cancellation. `internal/cli`
-validates input, resolves ephemeral credentials and renders output. `internal/api`
+validates input, loads saved sessions and renders output. `internal/api`
 implements query encoding, request bodies, HTTP errors and streaming downloads.
-`internal/config` contains known endpoint/space constants and environment lookup.
+`internal/config` contains constants, environment lookup and a `SessionStore`
+interface backed by the OS keyring. CLI fixtures inject a memory store and verify
+login, reuse across separate command trees, missing/expired sessions and logout.
 
 ```bash
 gofmt -w cmd internal scripts
@@ -20,7 +22,9 @@ go run ./scripts/package -version dev
 ```
 
 Tests use local HTTP fixtures and temporary files. Do not require a real school
-account in CI. Add meaningful tests for endpoint/query/body encoding, input
+account in CI. An isolated credential-store round-trip test uses a unique service
+name and dummy token, cleaning it up afterward; it skips if the OS keyring is
+unavailable (such as headless Linux). Add meaningful tests for encoding, input
 validation, redaction or filesystem semantics when extending those boundaries.
 
 Generated help lives in `docs/commands`; edit the command tree and regenerate it.

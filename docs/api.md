@@ -13,8 +13,11 @@ Protocol source: [dlut-pan API reference](https://github.com/NAOSI-DLUT/dlut-ski
 | File download | `GET /v1/roots/{root_id}/files/{file_id}` | Query: token; binary response or storage redirect |
 
 The API base is `http://pan.dlut.edu.cn/v1`. Query parameters are URL-encoded.
-Authentication is performed only when an operation needs it. Dry runs require
-no credentials and make no HTTP requests.
+`auth login` performs authentication and saves the token and API endpoint in the
+system credential store. Remote operations require and automatically reuse that
+session; they never implicitly sign in. Dry runs require no session and make no
+HTTP requests. A 401 prompts re-login; a 403 reports permissions without deleting
+the saved session. No token-refresh or server-side logout endpoint is documented.
 
 The client accepts JSON values without forcing undocumented fields into a
 model. Known `entries`/`items` arrays with names are rendered as tables; unknown

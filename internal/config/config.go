@@ -1,4 +1,4 @@
-// Package config resolves process-local settings. It never persists credentials.
+// Package config resolves settings and persists sessions in the system keyring.
 package config
 
 import "os"

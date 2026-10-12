@@ -13,7 +13,8 @@ terminal, while JSON output and request previews support scripts and agents.
 
 The command tree keeps authentication, file operations, search, groups and space
 identifiers separate. Every operation has its own help, argument checks and
-examples. Credentials stay in the current process and are never persisted.
+examples. Log in once; later commands reuse a session saved in the operating
+system's credential store. Passwords are never saved.
 
 > **Project status:** The documented sign-in, folder listing, name/full-text/group
 > search, group join and file download protocols are implemented and covered by
@@ -26,15 +27,17 @@ examples. Credentials stay in the current process and are never persisted.
 
 Commands translate arguments into the request formats documented by
 [DLUT Skills](https://github.com/NAOSI-DLUT/dlut-skills/tree/main/skills/dlut-pan).
-An account login produces an in-memory token for the current operation; an
-existing browser token can also be supplied directly.
+An account login saves the returned token in the system credential store. Remote
+commands require a saved session and reuse it automatically until it expires or
+you log out. Existing browser tokens can be imported through `auth login`.
 
 ```mermaid
 flowchart LR
     User[Terminal or agent] --> CLI[Cobra commands]
-    Credentials[Token or account input] --> API[Go API client]
+    LoginCommand[auth login] --> Login[Sign-in endpoint]
+    Login --> Session[System credential store]
+    Session --> API[Go API client]
     CLI --> API
-    API --> Login[Sign-in endpoint]
     API --> Pan[DLUT Pan API]
     Pan --> Output[Tables or redacted JSON]
     Pan --> Download[Complete local file]
@@ -62,12 +65,15 @@ git clone https://github.com/saurlax/dlut-pan-cli.git
 cd dlut-pan-cli
 go build -o bin/dlut-pan ./cmd/dlut-pan
 ./bin/dlut-pan --help
-./bin/dlut-pan file list / --username YOUR_STUDENT_OR_STAFF_NUMBER
+./bin/dlut-pan auth login
+./bin/dlut-pan file list /
 ```
 
 On Windows, build with `go build -o bin/dlut-pan.exe ./cmd/dlut-pan` and run
 `.\bin\dlut-pan.exe --help`. The account example prompts for a password without
-echoing it. The password and returned token are discarded when the process exits.
+echoing it. Login saves the token in Windows Credential Manager, macOS Keychain,
+or Linux Secret Service. The password is discarded after login. Subsequent
+commands need no account, password or token arguments.
 
 To install directly from the repository:
 
@@ -79,15 +85,17 @@ Put the Go binary directory on `PATH`. Tagged releases can publish six ZIP
 archives for Linux, macOS and Windows on amd64/arm64, with SHA-256 checksums.
 See [Releases](https://github.com/saurlax/dlut-pan-cli/releases) for available builds.
 
-For an existing browser session, provide the token through `DLUT_PAN_TOKEN` or
-`--token-stdin`. See [authentication](docs/authentication.md) for CAS extraction,
-credential precedence, PowerShell examples and the upstream transport constraints.
+For an existing browser session, import its token once using
+`dlut-pan auth login --token-stdin`. See [authentication](docs/authentication.md)
+for session storage, CAS extraction, PowerShell examples and upstream constraints.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `auth login` | Verify account credentials; discard the token at process exit |
+| `auth login` | Log in and save the session in the system credential store |
+| `auth status` | Inspect local session presence without printing the token |
+| `auth logout` | Remove the saved local session |
 | `file list [PATH]` | List one directory; default `/` |
 | `file download FILE_ID --output FILE` | Download a specified file |
 | `search files QUERY` | Search file and directory names |
@@ -107,9 +115,11 @@ dlut-pan file download FILE_ID --output lecture.pdf --timeout 10m
 dlut-pan search files '课程' --root-id YOUR_PERSONAL_ROOT --dry-run
 ```
 
-These data commands expect a token in the environment, `--token-stdin`, or account
-authentication. Add `--username YOUR_ACCOUNT` to sign in for each invocation.
-`auth login` validates credentials but does not establish a saved session.
+Run `auth login` before data commands. They load the saved session automatically
+and never prompt for credentials or read account/token environment variables.
+An absent session produces a login instruction; a rejected/expired session
+produces a re-login instruction. `auth logout` removes the saved session.
+Help, completion, `space naosi` and request previews work without logging in.
 
 Use `dlut-pan COMMAND --help` for details, such as
 `dlut-pan file download --help`. Running a command group alone displays its help.
@@ -121,17 +131,18 @@ and shell-specific completion instructions. Exit codes are `0` for success,
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `DLUT_PAN_TOKEN` | Existing access token | Unset |
-| `DLUT_PAN_USERNAME` | Student/staff login account | Unset |
-| `DLUT_PAN_PASSWORD` | Account password for this process | Hidden terminal prompt |
+| `DLUT_PAN_USERNAME` | Account input for `auth login` only | Terminal prompt |
+| `DLUT_PAN_PASSWORD` | Password input for `auth login` only | Hidden terminal prompt |
 | `DLUT_PAN_ROOT_ID` | Selected space root | NAOSI `ak7an4chdvtq` |
 | `DLUT_PAN_BASE_URL` | API base URL | `http://pan.dlut.edu.cn/v1` |
 | `DLUT_PAN_AUTH_URL` | Full sign-in endpoint | `http://202.118.66.144:8088/v1/auth/sign_in` |
 
-Corresponding flags override environment settings. An explicit `--username` or
-`--password-stdin` selects fresh account authentication over an environment token.
-`--token-stdin` overrides an environment token. Passwords have no command-line
-flag. The CLI does not load `.env` files or maintain a credential store.
+Corresponding flags override environment settings. Login saves the API endpoint
+along with the token; later commands use that endpoint automatically. An explicit
+different `--base-url` requires a new login rather than forwarding the saved token
+to another server. `--username`, `--password-stdin`, `--token-stdin`, `--auth-url`
+and `--device` belong only to `auth login`. `DLUT_PAN_TOKEN` is no longer used.
+The CLI does not load `.env` files or fall back to plaintext credential files.
 
 ## Develop
 
@@ -142,7 +153,7 @@ The README organization follows [AgentCauseway](https://github.com/saurlax/agent
 cmd/dlut-pan/       Executable entry point and signal handling
 internal/api/       HTTP protocol, redaction and staged downloads
 internal/cli/       Cobra command tree, help, rendering and validation
-internal/config/    Constants and process-local settings
+internal/config/    Settings and system credential-store sessions
 scripts/docs/      Generated command documentation
 scripts/package/   Cross-platform ZIP packaging and checksums
 docs/              Authentication, API notes and command reference
