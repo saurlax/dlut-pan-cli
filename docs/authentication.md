@@ -19,10 +19,11 @@ dlut-pan auth logout
 dlut-pan auth login --username YOUR_ACCOUNT
 ```
 
-登录成功后，只把 token 和它对应的 API 地址保存到系统凭证库：Windows
-Credential Manager、macOS Keychain 或 Linux Secret Service。学号和密码不保存，
-token 不打印、不写入项目文件。凭证库不可用或被锁定时，命令报错，不会谎报
-登录成功或回退到明文文件。Linux 需要可用的 D-Bus 会话和 Secret Service。
+账号登录成功后，CLI 将账号、密码、token 和 API 地址保存为明文 JSON。
+Windows 使用 `%USERPROFILE%\.dlut-pan\session.json`，macOS 和 Linux 使用
+`~/.dlut-pan/session.json`。macOS 和 Linux 上新建的目录权限为 `0700`，
+会话文件为 `0600`（均受 umask 限制）。Windows 文件继承父目录的访问权限。
+此前保存在系统凭证库中的会话需要重新登录或导入浏览器 token。
 
 再次登录成功会替换旧会话；登录失败时保留原会话。默认只管理一个当前会话。
 后续命令自动使用登录时保存的 API 地址；如果显式选择另一个 `--base-url`，
@@ -77,7 +78,8 @@ Remove-Variable panSecureToken, panCredential
 dlut-pan file list /
 ```
 
-导入仅保存 token，没有服务端验证；第一次远程调用会检验是否被接受。
+导入会用 token 和 API 地址替换整个会话文件，清除先前保存的账号和密码。
+第一次远程调用会检验 token 是否被接受。
 
 ## 传输与空间
 

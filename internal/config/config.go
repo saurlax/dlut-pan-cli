@@ -1,4 +1,4 @@
-// Package config resolves settings and persists sessions in the system keyring.
+// Package config resolves settings and persists sessions in the user's home directory.
 package config
 
 import "os"

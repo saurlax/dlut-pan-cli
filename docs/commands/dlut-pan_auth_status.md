@@ -4,7 +4,7 @@ Show whether a local login session is saved.
 
 ### Synopsis
 
-Inspect the system credential store without network requests or displaying the token.
+Check for a session in ~/.dlut-pan/session.json without network requests or displaying credentials.
 Session presence does not prove the server still accepts it; expired sessions require auth login again.
 
 ```

@@ -5,7 +5,7 @@ Operate DLUT Pan from your terminal.
 ### Synopsis
 
 Unofficial CLI for Dalian University of Technology's cloud drive.
-Run 'dlut-pan auth login' once to save your session in the system credential store.
+Run 'dlut-pan auth login' once to save your session in ~/.dlut-pan/session.json.
 File, search and group commands reuse the saved session without asking for credentials.
 The default root is NAOSI; use --root-id for your personal or another group space.
 Run any command group without a subcommand to see its help.

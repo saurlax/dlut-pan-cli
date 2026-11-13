@@ -4,8 +4,8 @@ Log in, inspect the saved session or log out.
 
 ### Synopsis
 
-Log in once before using remote commands. Sessions are saved in the system credential store.
-Passwords are never saved. Use status to inspect local session presence and logout to remove it.
+Log in once before using remote commands. Credentials are saved in ~/.dlut-pan/session.json.
+Use status to inspect local session presence and logout to remove the file.
 
 ```
 dlut-pan auth [flags]

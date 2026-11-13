@@ -32,7 +32,7 @@ type options struct {
 
 // Execute returns 0 for success, 2 for usage errors, and 1 for runtime errors.
 func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer, version string) int {
-	return execute(ctx, args, in, out, errOut, version, config.SystemStore{})
+	return execute(ctx, args, in, out, errOut, version, config.FileStore{})
 }
 
 func execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer, version string, store config.SessionStore) int {
@@ -76,12 +76,12 @@ func group(use, short, long string) *cobra.Command {
 }
 
 func New(version string) *cobra.Command {
-	return newRoot(version, config.SystemStore{})
+	return newRoot(version, config.FileStore{})
 }
 
 func newRoot(version string, store config.SessionStore) *cobra.Command {
 	o := &options{store: store}
-	root := group("dlut-pan", "Operate DLUT Pan from your terminal.", "Unofficial CLI for Dalian University of Technology's cloud drive.\nRun 'dlut-pan auth login' once to save your session in the system credential store.\nFile, search and group commands reuse the saved session without asking for credentials.\nThe default root is NAOSI; use --root-id for your personal or another group space.\nRun any command group without a subcommand to see its help.")
+	root := group("dlut-pan", "Operate DLUT Pan from your terminal.", "Unofficial CLI for Dalian University of Technology's cloud drive.\nRun 'dlut-pan auth login' once to save your session in ~/.dlut-pan/session.json.\nFile, search and group commands reuse the saved session without asking for credentials.\nThe default root is NAOSI; use --root-id for your personal or another group space.\nRun any command group without a subcommand to see its help.")
 	root.Version = version
 	root.SilenceErrors = true
 	root.SilenceUsage = true
@@ -110,33 +110,35 @@ func newRoot(version string, store config.SessionStore) *cobra.Command {
 		return nil
 	}
 
-	auth := group("auth", "Log in, inspect the saved session or log out.", "Log in once before using remote commands. Sessions are saved in the system credential store.\nPasswords are never saved. Use status to inspect local session presence and logout to remove it.")
-	login := &cobra.Command{Use: "login", Short: "Log in and save the session for subsequent commands.", Long: "Enter your account and password at terminal prompts, or supply --username and --password-stdin.\nThe returned token and API endpoint are saved in the system credential store; passwords are discarded.\nFor a browser CAS session, --token-stdin imports its token without remote validation.\nA successful login replaces the previous saved session. Later commands require no credential input.", Example: "  dlut-pan auth login\n  dlut-pan auth login --username YOUR_ACCOUNT\n  dlut-pan file list /", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
+	auth := group("auth", "Log in, inspect the saved session or log out.", "Log in once before using remote commands. Credentials are saved in ~/.dlut-pan/session.json.\nUse status to inspect local session presence and logout to remove the file.")
+	login := &cobra.Command{Use: "login", Short: "Log in and save the session for subsequent commands.", Long: "Enter your account and password at terminal prompts, or supply --username and --password-stdin.\nThe account, password, token and API endpoint are saved as plaintext in ~/.dlut-pan/session.json.\nFor a browser CAS session, --token-stdin saves only the token and API endpoint without remote validation.\nA successful login replaces the previous saved session. Later commands require no credential input.", Example: "  dlut-pan auth login\n  dlut-pan auth login --username YOUR_ACCOUNT\n  dlut-pan file list /", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
 		if o.dryRun {
 			if o.tokenStdin {
 				return writeJSON(cmd.OutOrStdout(), map[string]any{"action": "save_browser_session", "base_url": o.base(), "dry_run": true})
 			}
 			return o.preview(cmd, "POST", o.auth(), url.Values{"username": {"[REDACTED]"}, "password": {"[REDACTED]"}, "link_device": {o.device}, "link_name": {o.device}, "ldap_name": {o.device}}, nil)
 		}
-		client := o.client()
+		session := config.Session{BaseURL: o.base()}
 		if o.tokenStdin {
 			token, err := stdinSecret(cmd)
 			if err != nil {
 				return err
 			}
-			client.Token = strings.TrimSpace(token)
-			if client.Token == "" {
+			session.Token = strings.TrimSpace(token)
+			if session.Token == "" {
 				return invalid("stdin token must not be empty")
 			}
 		} else {
-			if _, err := o.login(cmd, client); err != nil {
+			var err error
+			session, err = o.login(cmd)
+			if err != nil {
 				return err
 			}
 		}
-		if err := o.store.Save(config.Session{Token: client.Token, BaseURL: o.base()}); err != nil {
+		if err := o.store.Save(session); err != nil {
 			return err
 		}
-		return o.render(cmd, map[string]any{"logged_in": true, "session_saved": true, "base_url": o.base()})
+		return o.render(cmd, map[string]any{"logged_in": true, "session_saved": true, "base_url": session.BaseURL})
 	}}
 	login.Flags().StringVar(&o.authURL, "auth-url", "", "Login endpoint (DLUT_PAN_AUTH_URL or "+config.AuthURL+")")
 	login.Flags().StringVar(&o.username, "username", "", "Student/staff account (DLUT_PAN_USERNAME or terminal prompt)")
@@ -145,7 +147,7 @@ func newRoot(version string, store config.SessionStore) *cobra.Command {
 	login.Flags().StringVar(&o.device, "device", "dlut-pan-cli", "Login device, link name and LDAP identifier")
 	login.MarkFlagsMutuallyExclusive("token-stdin", "password-stdin")
 	login.MarkFlagsMutuallyExclusive("token-stdin", "username")
-	status := &cobra.Command{Use: "status", Short: "Show whether a local login session is saved.", Long: "Inspect the system credential store without network requests or displaying the token.\nSession presence does not prove the server still accepts it; expired sessions require auth login again.", Example: "  dlut-pan auth status", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
+	status := &cobra.Command{Use: "status", Short: "Show whether a local login session is saved.", Long: "Check for a session in ~/.dlut-pan/session.json without network requests or displaying credentials.\nSession presence does not prove the server still accepts it; expired sessions require auth login again.", Example: "  dlut-pan auth status", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
 		session, err := o.store.Load()
 		if errors.Is(err, config.ErrNoSession) {
 			return o.render(cmd, map[string]any{"logged_in": false, "session_saved": false})
@@ -155,7 +157,7 @@ func newRoot(version string, store config.SessionStore) *cobra.Command {
 		}
 		return o.render(cmd, map[string]any{"logged_in": true, "session_saved": true, "base_url": session.BaseURL})
 	}}
-	logout := &cobra.Command{Use: "logout", Short: "Remove the saved local login session.", Long: "Delete the session from the system credential store. Later remote commands require auth login again.\nThis is a local logout; no documented endpoint is available to revoke the server token.", Example: "  dlut-pan auth logout", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
+	logout := &cobra.Command{Use: "logout", Short: "Remove the saved local login session.", Long: "Delete ~/.dlut-pan/session.json. Later remote commands require auth login again.\nThis is a local logout; no documented endpoint is available to revoke the server token.", Example: "  dlut-pan auth logout", Args: args(0), RunE: func(cmd *cobra.Command, _ []string) error {
 		if o.dryRun {
 			return writeJSON(cmd.OutOrStdout(), map[string]any{"action": "remove_saved_session", "dry_run": true})
 		}
@@ -314,16 +316,16 @@ func stdinSecret(cmd *cobra.Command) (string, error) {
 	return strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r"), nil
 }
 
-func (o *options) login(cmd *cobra.Command, client *api.Client) (any, error) {
+func (o *options) login(cmd *cobra.Command) (config.Session, error) {
 	username := config.Value(o.username, "DLUT_PAN_USERNAME", "")
 	if strings.TrimSpace(username) == "" {
 		f, ok := cmd.InOrStdin().(*os.File)
 		if !ok || !term.IsTerminal(int(f.Fd())) || o.passwordStdin {
-			return nil, invalid("provide --username or DLUT_PAN_USERNAME when no account prompt is available")
+			return config.Session{}, invalid("provide --username or DLUT_PAN_USERNAME when no account prompt is available")
 		}
 		fmt.Fprint(cmd.ErrOrStderr(), "Account: ")
 		if _, err := fmt.Fscanln(cmd.InOrStdin(), &username); err != nil || strings.TrimSpace(username) == "" {
-			return nil, invalid("account must not be empty")
+			return config.Session{}, invalid("account must not be empty")
 		}
 	}
 	password := os.Getenv("DLUT_PAN_PASSWORD")
@@ -331,28 +333,32 @@ func (o *options) login(cmd *cobra.Command, client *api.Client) (any, error) {
 		var err error
 		password, err = stdinSecret(cmd)
 		if err != nil {
-			return nil, err
+			return config.Session{}, err
 		}
 	} else if password == "" {
 		f, ok := cmd.InOrStdin().(*os.File)
 		if !ok || !term.IsTerminal(int(f.Fd())) {
-			return nil, invalid("no terminal password prompt available; use DLUT_PAN_PASSWORD or --password-stdin")
+			return config.Session{}, invalid("no terminal password prompt available; use DLUT_PAN_PASSWORD or --password-stdin")
 		}
 		fmt.Fprint(cmd.ErrOrStderr(), "Password: ")
 		b, err := term.ReadPassword(int(f.Fd()))
 		fmt.Fprintln(cmd.ErrOrStderr())
 		if err != nil {
-			return nil, errors.New("cannot read password from terminal")
+			return config.Session{}, errors.New("cannot read password from terminal")
 		}
 		password = string(b)
 	}
 	if password == "" {
-		return nil, invalid("password must not be empty")
+		return config.Session{}, invalid("password must not be empty")
 	}
 	if strings.TrimSpace(o.device) == "" {
-		return nil, invalid("--device must not be empty")
+		return config.Session{}, invalid("--device must not be empty")
 	}
-	return client.Login(cmd.Context(), username, password, o.device)
+	client := o.client()
+	if _, err := client.Login(cmd.Context(), username, password, o.device); err != nil {
+		return config.Session{}, err
+	}
+	return config.Session{Token: client.Token, BaseURL: client.BaseURL, Username: username, Password: password}, nil
 }
 
 func (o *options) authenticated(cmd *cobra.Command) (*api.Client, error) {

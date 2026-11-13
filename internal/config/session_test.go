@@ -2,28 +2,40 @@ package config
 
 import (
 	"errors"
-	"strconv"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
-	"time"
 )
 
-// Use an isolated service; never read or replace the user's real login session.
-func TestSystemStoreRoundTrip(t *testing.T) {
-	store := SystemStore{serviceName: "dlut-pan-cli-test-" + strconv.FormatInt(time.Now().UnixNano(), 10)}
-	session := Session{Token: "fixture-session-token", BaseURL: BaseURL}
+func TestFileStoreRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	store := FileStore{}
+	session := Session{Token: "fixture-session-token", BaseURL: BaseURL, Username: "student", Password: "fixture-password"}
 	if err := store.Save(session); err != nil {
-		t.Skip("OS keyring unavailable in this environment:", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := store.Clear(); err != nil {
-			t.Error(err)
+	path := filepath.Join(home, ".dlut-pan", "session.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		dir, err := os.Stat(filepath.Dir(path))
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
+		if info.Mode().Perm()&0o077 != 0 || dir.Mode().Perm()&0o077 != 0 {
+			t.Fatal("session or session directory is accessible to other users")
+		}
+	}
 	got, err := store.Load()
 	if err != nil || got != session {
 		t.Fatal("saved session did not round trip")
 	}
-	session.Token = "replacement-fixture-token"
+	session = Session{Token: "replacement-fixture-token", BaseURL: BaseURL}
 	if err := store.Save(session); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +56,7 @@ func TestSystemStoreRoundTrip(t *testing.T) {
 
 func TestRefuseEmptySession(t *testing.T) {
 	for _, session := range []Session{{}, {Token: "token"}, {BaseURL: BaseURL}} {
-		if err := (SystemStore{}).Save(session); err == nil {
+		if err := (FileStore{}).Save(session); err == nil {
 			t.Fatal("accepted incomplete session")
 		}
 	}

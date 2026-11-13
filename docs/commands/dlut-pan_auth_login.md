@@ -5,8 +5,8 @@ Log in and save the session for subsequent commands.
 ### Synopsis
 
 Enter your account and password at terminal prompts, or supply --username and --password-stdin.
-The returned token and API endpoint are saved in the system credential store; passwords are discarded.
-For a browser CAS session, --token-stdin imports its token without remote validation.
+The account, password, token and API endpoint are saved as plaintext in ~/.dlut-pan/session.json.
+For a browser CAS session, --token-stdin saves only the token and API endpoint without remote validation.
 A successful login replaces the previous saved session. Later commands require no credential input.
 
 ```

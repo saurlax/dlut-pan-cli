@@ -4,7 +4,7 @@ Remove the saved local login session.
 
 ### Synopsis
 
-Delete the session from the system credential store. Later remote commands require auth login again.
+Delete ~/.dlut-pan/session.json. Later remote commands require auth login again.
 This is a local logout; no documented endpoint is available to revoke the server token.
 
 ```

@@ -170,7 +170,8 @@ func TestLoginPersistsAcrossInvocationsAndLogout(t *testing.T) {
 	defer server.Close()
 	store := &memoryStore{}
 	code, out, err := runStore(t, store, "secret +&\n", "auth", "login", "--username", "student", "--password-stdin", "--auth-url", server.URL+"/sign-in", "--base-url", server.URL)
-	if code != 0 || loginHits != 1 || store.session.Token != "fresh" || strings.Contains(out, "fresh") || strings.Contains(out, "secret") {
+	want := config.Session{Token: "fresh", BaseURL: server.URL, Username: "student", Password: "secret +&"}
+	if code != 0 || loginHits != 1 || store.session != want || strings.Contains(out+err, "fresh") || strings.Contains(out+err, "secret") || strings.Contains(out+err, "student") {
 		t.Fatalf("code=%d out=%s err=%s", code, out, err)
 	}
 	// A new command tree represents a later CLI process. No flags or input credentials.

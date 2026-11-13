@@ -7,8 +7,9 @@ root, making repeated invocations and tests independent.
 validates input, loads saved sessions and renders output. `internal/api`
 implements query encoding, request bodies, HTTP errors and streaming downloads.
 `internal/config` contains constants, environment lookup and a `SessionStore`
-interface backed by the OS keyring. CLI fixtures inject a memory store and verify
-login, reuse across separate command trees, missing/expired sessions and logout.
+interface backed by a JSON file in the user's home directory. CLI fixtures
+inject a memory store and verify login, reuse across separate command trees,
+missing/expired sessions and logout.
 
 ```bash
 gofmt -w cmd internal scripts
@@ -21,11 +22,10 @@ go build -o bin/dlut-pan ./cmd/dlut-pan
 go run ./scripts/package -version dev
 ```
 
-Tests use local HTTP fixtures and temporary files. Do not require a real school
-account in CI. An isolated credential-store round-trip test uses a unique service
-name and dummy token, cleaning it up afterward; it skips if the OS keyring is
-unavailable (such as headless Linux). Add meaningful tests for encoding, input
-validation, redaction or filesystem semantics when extending those boundaries.
+Tests use local HTTP fixtures and temporary files. The session round-trip test
+uses a temporary home directory and dummy credentials. Add meaningful tests for
+encoding, input validation, redaction or filesystem semantics when extending
+those boundaries.
 
 Generated help lives in `docs/commands`; edit the command tree and regenerate it.
 Do not edit generated pages directly. CI regenerates pages and fails on drift.

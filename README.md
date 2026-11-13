@@ -13,8 +13,8 @@ terminal, while JSON output and request previews support scripts and agents.
 
 The command tree keeps authentication, file operations, search, groups and space
 identifiers separate. Every operation has its own help, argument checks and
-examples. Log in once; later commands reuse a session saved in the operating
-system's credential store. Passwords are never saved.
+examples. Log in once and later commands reuse the session in
+`~/.dlut-pan/session.json` on Windows, macOS and Linux.
 
 > **Project status:** The documented sign-in, folder listing, name/full-text/group
 > search, group join and file download protocols are implemented and covered by
@@ -27,15 +27,16 @@ system's credential store. Passwords are never saved.
 
 Commands translate arguments into the request formats documented by
 [DLUT Skills](https://github.com/NAOSI-DLUT/dlut-skills/tree/main/skills/dlut-pan).
-An account login saves the returned token in the system credential store. Remote
-commands require a saved session and reuse it automatically until it expires or
-you log out. Existing browser tokens can be imported through `auth login`.
+An account login saves the account, password, token and API endpoint in a
+plaintext JSON file in your home directory. Remote commands reuse the token
+until it expires or you log out. Existing browser tokens can be imported through
+`auth login`.
 
 ```mermaid
 flowchart LR
     User[Terminal or agent] --> CLI[Cobra commands]
     LoginCommand[auth login] --> Login[Sign-in endpoint]
-    Login --> Session[System credential store]
+    Login --> Session["~/.dlut-pan/session.json"]
     Session --> API[Go API client]
     CLI --> API
     API --> Pan[DLUT Pan API]
@@ -56,33 +57,37 @@ NAOSI is the default space: root `ak7an4chdvtq`, group `ej7f8s176d8f`.
 These IDs serve different purposes. Membership and permissions are enforced by
 the server; a `403` does not trigger automatic joining or a guessed personal root.
 
-## Run from source
+## Install
 
 You need **Go 1.26 or later**.
-
-```bash
-git clone https://github.com/saurlax/dlut-pan-cli.git
-cd dlut-pan-cli
-go build -o bin/dlut-pan ./cmd/dlut-pan
-./bin/dlut-pan --help
-./bin/dlut-pan auth login
-./bin/dlut-pan file list /
-```
-
-On Windows, build with `go build -o bin/dlut-pan.exe ./cmd/dlut-pan` and run
-`.\bin\dlut-pan.exe --help`. The account example prompts for a password without
-echoing it. Login saves the token in Windows Credential Manager, macOS Keychain,
-or Linux Secret Service. The password is discarded after login. Subsequent
-commands need no account, password or token arguments.
-
-To install directly from the repository:
 
 ```bash
 go install github.com/saurlax/dlut-pan-cli/cmd/dlut-pan@latest
 ```
 
-Put the Go binary directory on `PATH`. Tagged releases can publish six ZIP
-archives for Linux, macOS and Windows on amd64/arm64, with SHA-256 checksums.
+To install from a local checkout instead, run:
+
+```bash
+git clone https://github.com/saurlax/dlut-pan-cli.git
+cd dlut-pan-cli
+go install ./cmd/dlut-pan
+```
+
+Add the directory reported by `go env GOBIN` to `PATH`. If it is empty, use the `bin` directory under
+`go env GOPATH` (typically `~/go/bin` or `%USERPROFILE%\go\bin`).
+
+```bash
+dlut-pan --help
+dlut-pan auth login
+dlut-pan file list /
+```
+
+The login prompt hides the password as you type. If your session was saved by an
+older version in the system credential store, run `dlut-pan auth login` again
+to create the home-directory session file.
+
+Tagged releases can publish six ZIP archives for Linux, macOS and Windows on
+amd64/arm64, with SHA-256 checksums.
 See [Releases](https://github.com/saurlax/dlut-pan-cli/releases) for available builds.
 
 For an existing browser session, import its token once using
@@ -93,7 +98,7 @@ for session storage, CAS extraction, PowerShell examples and upstream constraint
 
 | Command | Purpose |
 | --- | --- |
-| `auth login` | Log in and save the session in the system credential store |
+| `auth login` | Log in and save the session in `~/.dlut-pan/session.json` |
 | `auth status` | Inspect local session presence without printing the token |
 | `auth logout` | Remove the saved local session |
 | `file list [PATH]` | List one directory; default `/` |
@@ -142,7 +147,7 @@ along with the token; later commands use that endpoint automatically. An explici
 different `--base-url` requires a new login rather than forwarding the saved token
 to another server. `--username`, `--password-stdin`, `--token-stdin`, `--auth-url`
 and `--device` belong only to `auth login`. `DLUT_PAN_TOKEN` is no longer used.
-The CLI does not load `.env` files or fall back to plaintext credential files.
+The CLI reads environment variables from the current process.
 
 ## Develop
 
@@ -153,7 +158,7 @@ The README organization follows [AgentCauseway](https://github.com/saurlax/agent
 cmd/dlut-pan/       Executable entry point and signal handling
 internal/api/       HTTP protocol, redaction and staged downloads
 internal/cli/       Cobra command tree, help, rendering and validation
-internal/config/    Settings and system credential-store sessions
+internal/config/    Settings and home-directory sessions
 scripts/docs/      Generated command documentation
 scripts/package/   Cross-platform ZIP packaging and checksums
 docs/              Authentication, API notes and command reference
